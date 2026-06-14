@@ -19,6 +19,22 @@ and installs it to `~/.local/bin/tunneldir` (no sudo). Pin a version with
 `VERSION=v0.1.0 sh` or change the target with `INSTALL_DIR=...`. Make sure
 `~/.local/bin` is on your `PATH`.
 
+On a fresh install it also writes a starter `~/.config/tunneldir/tunnels.yaml`
+(via `tunneldir init`, which never overwrites an existing config). Edit that file
+with your hosts, then `tunneldir validate`. If `autossh` is missing it offers to
+install it via your package manager (apt/dnf/pacman/zypper/apk/yum/brew) — it's
+recommended for auto-reconnect, but tunneldir falls back to plain `ssh` without it.
+
+### Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tallbiscuits/tunneldir/main/uninstall.sh | sh
+```
+
+Removes the systemd unit and the binary, and asks before deleting your config and
+state. Add `--purge` (`... | sh -s -- --purge`) to remove config and state without
+prompting; `INSTALL_DIR=...` if you installed it somewhere other than `~/.local/bin`.
+
 ```sh
 tunneldir --version        # show the installed version
 tunneldir update           # update in place to the latest release
@@ -42,7 +58,9 @@ Requires Go to build. Runtime needs `ssh`, and ideally `autossh`
 
 ## Configure
 
-Copy `tunnels.example.yaml` to one of these (first match wins):
+Run `tunneldir init` to write a starter `~/.config/tunneldir/tunnels.yaml`
+(or copy `tunnels.example.yaml` yourself). The config is resolved from the first
+of these that exists:
 
 1. path given with `--config` / `$TUNNELDIR_CONFIG`
 2. `./tunnels.yaml` in the current directory
@@ -103,6 +121,7 @@ tunneldir status [names...]      # default command; docker-ps-style table
 tunneldir logs <name> [-f]
 tunneldir list
 tunneldir validate
+tunneldir init                   # write a starter config (won't overwrite)
 tunneldir install [--run]        # systemd autostart unit
 tunneldir uninstall [--run]
 tunneldir update [--check]       # self-update to the latest release

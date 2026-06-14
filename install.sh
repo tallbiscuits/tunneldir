@@ -64,6 +64,40 @@ mkdir -p "$INSTALL_DIR"
 install -m 0755 "${tmp}/${asset}" "${INSTALL_DIR}/tunneldir"
 echo "installed ${INSTALL_DIR}/tunneldir"
 
+# Create a starter config on first install. `init` never overwrites an existing
+# one, so this is safe to run on every (re)install.
+"${INSTALL_DIR}/tunneldir" init || true
+
+# Offer to install autossh (auto-reconnect); tunneldir works without it by
+# falling back to plain ssh, so this is best-effort and never fails the install.
+if ! command -v autossh >/dev/null 2>&1; then
+  if   command -v apt-get >/dev/null 2>&1; then pm="sudo apt-get install -y autossh"
+  elif command -v dnf     >/dev/null 2>&1; then pm="sudo dnf install -y autossh"
+  elif command -v pacman  >/dev/null 2>&1; then pm="sudo pacman -S --noconfirm autossh"
+  elif command -v zypper  >/dev/null 2>&1; then pm="sudo zypper install -y autossh"
+  elif command -v apk     >/dev/null 2>&1; then pm="sudo apk add autossh"
+  elif command -v yum     >/dev/null 2>&1; then pm="sudo yum install -y autossh"
+  elif command -v brew    >/dev/null 2>&1; then pm="brew install autossh"
+  else pm=""
+  fi
+
+  echo ""
+  echo "autossh is not installed — recommended for auto-reconnecting tunnels"
+  echo "(without it tunneldir falls back to plain ssh)."
+  if [ -z "$pm" ]; then
+    echo "install it with your package manager and re-run tunneldir."
+  elif [ -r /dev/tty ]; then
+    printf "install autossh now with '%s'? [y/N] " "$pm"
+    read -r ans < /dev/tty || ans=""
+    case "$ans" in
+      y|Y|yes|YES) sh -c "$pm" || echo "autossh install failed; run manually: $pm" >&2 ;;
+      *) echo "skipped; install later with: $pm" ;;
+    esac
+  else
+    echo "install it with: $pm"
+  fi
+fi
+
 # Nudge the user if the install dir is not on PATH.
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
@@ -71,4 +105,5 @@ case ":$PATH:" in
      echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" >&2 ;;
 esac
 
+echo ""
 echo "run 'tunneldir --version' to confirm."

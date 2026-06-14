@@ -33,6 +33,13 @@ func ConfigFile(override string) string {
 	return filepath.Join(configHome(), appName, "tunnels.yaml")
 }
 
+// UserConfigFile returns the default per-user config path
+// ($XDG_CONFIG_HOME/tunneldir/tunnels.yaml), ignoring a local ./tunnels.yaml.
+// It is where `tunneldir init` writes a starter config.
+func UserConfigFile() string {
+	return filepath.Join(configHome(), appName, "tunnels.yaml")
+}
+
 // StateDir returns the runtime state directory ($XDG_STATE_HOME/tunneldir),
 // creating it if necessary. It is private to the user (0700) since the logs and
 // pidfiles beneath it can leak hostnames, usernames and connection detail.

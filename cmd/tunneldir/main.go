@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,27 +26,45 @@ var version = "dev"
 
 const usage = `tunneldir — manage SSH tunnels from a YAML file
 
+tunneldir keeps a set of SSH tunnels defined in tunnels.yaml. It starts them in
+the background with autossh (auto-reconnecting), falling back to plain ssh when
+autossh isn't installed, and shows a docker-ps-style view of what's up. Tunnels
+flagged "autostart: true" can be brought up at boot via a systemd user service.
+
 Usage:
   tunneldir [--config PATH] <command> [names...]
-  tunneldir <name> <command>            (convenience form)
+  tunneldir <name> <command>            (convenience form, e.g. "tunneldir web up")
 
-Commands:
+Tunnel commands (act on named tunnels, or --all / --autostart):
   up [names...] [--all] [--autostart] [--print-cmd]
-                          start tunnels in the background
-  down [names...] [--all] stop tunnels
-  restart [names...] [--all]
-                          restart tunnels
-  status [names...]       show a docker-ps-style status table (default)
-  logs <name> [-f]        show or follow a tunnel's log
-  list                    list tunnels defined in the config
-  validate                validate the config file
-  install [--run]         install/enable the systemd autostart unit
-  uninstall [--run]       disable/remove the systemd autostart unit
-  update [--check]        update to the latest release (--check only reports)
-  version                 print the version
+                              start tunnels in the background
+                              (--print-cmd prints the command without running it)
+  down [names...] [--all]     stop the selected tunnels
+  restart [names...] [--all]  stop then start the selected tunnels
+  status [names...]           status table: PID, uptime, UP/DEGRADED/DOWN (default)
+  logs <name> [-f]            print a tunnel's log; -f follows it
+
+Config commands:
+  list                        list the tunnels defined in the config
+  validate                    check that the config parses and is valid
+  init                        write a starter config (never overwrites an existing one)
+
+Autostart (systemd user service):
+  install [--run]             enable the autostart unit (--run applies it)
+  uninstall [--run]           disable/remove the autostart unit
+
+Maintenance:
+  update [--check]            update to the latest release (--check only reports)
+  version                     print the version
+  help                        show this help
 
 Config resolution: --config, then $TUNNELDIR_CONFIG, then ./tunnels.yaml,
 then ~/.config/tunneldir/tunnels.yaml
+
+Uninstall tunneldir entirely:
+  curl -fsSL https://raw.githubusercontent.com/tallbiscuits/tunneldir/main/uninstall.sh | sh
+This removes the autostart unit and the binary, and asks before deleting your
+config and state. Add "| sh -s -- --purge" to remove config and state too.
 `
 
 func main() {
@@ -71,6 +90,8 @@ func run(argv []string) int {
 		return 0
 	case "update":
 		return cmdUpdate(rest)
+	case "init":
+		return cmdInit(configPath)
 	case "install":
 		return toErr(service.Install(paths.ConfigFile(configPath), hasFlag(rest, "--run")))
 	case "uninstall":
@@ -204,6 +225,67 @@ func cmdLogs(rest []string) int {
 			return 1
 		}
 	}
+}
+
+// starterConfig is the commented template written by `tunneldir init`. Keep it
+// in sync with tunnels.example.yaml.
+const starterConfig = `# Tunnel Director configuration.
+# Edit this file, then run:  tunneldir validate  &&  tunneldir list
+
+defaults:
+  # SSH key used for every tunnel unless overridden per-tunnel. ~ is expanded.
+  identity_file: ~/.ssh/id_ed25519
+  # Passed as -o KEY=VALUE to every tunnel. These keep the link healthy and make
+  # even the plain-ssh fallback exit on a dead connection.
+  ssh_options:
+    ServerAliveInterval: 30
+    ServerAliveCountMax: 3
+    ExitOnForwardFailure: "yes"
+
+tunnels:
+  # Reach a remote web frontend (:80) and a database (:5432) on local ports.
+  - name: web-staging
+    host: staging.example.com
+    user: deploy
+    # port: 22                       # ssh port to the server (default 22)
+    # identity_file: ~/.ssh/id_staging  # optional per-tunnel key override
+    autostart: true                  # brought up at boot by the systemd unit
+    forwards:
+      - local: 8080:localhost:80     # -L : localhost:8080 -> server's :80
+      - local: 5432:db.internal:5432 # -L : localhost:5432 -> db.internal:5432
+
+  # A SOCKS proxy on localhost:1080, started manually:  tunneldir up socks-prod
+  - name: socks-prod
+    host: prod.example.com
+    user: deploy
+    autostart: false
+    forwards:
+      - dynamic: 1080                # -D 1080
+`
+
+// cmdInit writes a starter config to the --config path (if given) or the default
+// per-user location, creating parent directories. It never overwrites an
+// existing config, so it is safe to run from the installer on every install.
+func cmdInit(configPath string) int {
+	target := configPath
+	if target == "" {
+		target = paths.UserConfigFile()
+	}
+	if _, err := os.Stat(target); err == nil {
+		fmt.Printf("config already exists at %s (left untouched)\n", target)
+		return 0
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if err := os.WriteFile(target, []byte(starterConfig), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("wrote starter config to %s\n", target)
+	fmt.Println("edit it, then run: tunneldir validate && tunneldir list")
+	return 0
 }
 
 // cmdUpdate handles `tunneldir update [--check]`: --check only reports whether a
