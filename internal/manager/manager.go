@@ -79,12 +79,33 @@ func Restart(cfg *config.Config, names []string) error {
 }
 
 // Status returns the tracked pid for a tunnel and whether that process is alive.
+// "Alive" requires not just that *some* process holds the pid, but that it still
+// looks like one of our ssh/autossh processes — otherwise a recycled pid (the
+// tunnel died and the OS handed its pid to something unrelated) would be
+// mistaken for a running tunnel and, worse, killed by `down`.
 func Status(name string) (pid int, alive bool) {
 	pid, err := readPid(name)
 	if err != nil {
 		return 0, false
 	}
-	return pid, isAlive(pid)
+	return pid, isAlive(pid) && looksLikeTunnel(pid)
+}
+
+// looksLikeTunnel reports whether pid is one of our ssh/autossh processes, by
+// reading /proc/<pid>/comm. When the command name can't be determined (e.g. a
+// non-Linux host with no /proc) it returns true, so behaviour matches platforms
+// where this guard isn't available.
+func looksLikeTunnel(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return true
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "ssh", "autossh":
+		return true
+	default:
+		return false
+	}
 }
 
 // launch starts a tunnel detached in its own session, with output to its log
@@ -99,7 +120,7 @@ func launch(t config.Tunnel, defaults config.Defaults) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return 0, err
 	}
@@ -187,7 +208,7 @@ func writePid(name string, pid int) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644)
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600)
 }
 
 func clearPid(name string) {

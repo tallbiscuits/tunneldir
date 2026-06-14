@@ -66,6 +66,12 @@ tunnels:
 | `remote`   | `-R`    | `[bind:]listen:host:hostport` |
 | `dynamic`  | `-D`    | `[bind:]port`                 |
 
+> **Trust your `tunnels.yaml`.** Options under `ssh_options` are passed straight
+> to `ssh -o`, which includes directives like `ProxyCommand` and
+> `LocalCommand` that run arbitrary programs. Treat the config as executable
+> code: only run a `tunnels.yaml` you wrote or fully trust, just as you would a
+> shell script or an `ssh_config`.
+
 ## Commands
 
 ```sh
@@ -137,3 +143,31 @@ Remove it with `tunneldir uninstall --run`.
 - **Host keys:** first connections may need the server's key accepted. Either
   connect once interactively, or set `StrictHostKeyChecking`/`UserKnownHostsFile`
   under `defaults.ssh_options`.
+
+## Security
+
+`tunneldir` is a **local, single-user** tool. It runs as you, never as root, and
+exposes no network service of its own — the transport security is plain `ssh`'s.
+The intended threat model is "a tool you run on your own machine with your own
+config." Within that scope:
+
+- **Your `tunnels.yaml` is trusted, executable input.** `ssh_options` are passed
+  straight to `ssh -o`, which honours directives such as `ProxyCommand` and
+  `LocalCommand` that run arbitrary programs. Only run a config you wrote or fully
+  trust — the same care you'd give a shell script or an `ssh_config`.
+- **Host-key verification is delegated to ssh.** `tunneldir` does not relax it;
+  set `StrictHostKeyChecking`/`UserKnownHostsFile` yourself if you want it
+  stricter than your ssh defaults.
+- **State is kept private.** The state directory, logs and pidfiles under
+  `~/.local/state/tunneldir/` are created `0700`/`0600`, since logs can reveal
+  hostnames, usernames and connection detail.
+- **Process tracking is defensive.** A tracked pid is only treated as a live
+  tunnel if it still looks like our `ssh`/`autossh` process, so a recycled pid is
+  never mistakenly killed.
+
+Found a security issue? Please open an issue (or email the maintainer) rather
+than disclosing it publicly until it's addressed.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

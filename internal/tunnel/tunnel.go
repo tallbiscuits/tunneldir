@@ -152,6 +152,17 @@ func HasAutossh() bool {
 	return err == nil
 }
 
+// lookPathOr resolves name to its absolute path via PATH, so the binary we
+// actually exec is fixed at launch time (a later PATH change can't swap it) and
+// is shown explicitly by --print-cmd. If the lookup fails (binary not installed
+// here, e.g. when only printing the command) it falls back to the bare name.
+func lookPathOr(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	return name
+}
+
 // Command builds the full command for a tunnel: the binary plus its arguments,
 // and whether autossh (vs. plain ssh fallback) is being used.
 func Command(t config.Tunnel, defaults config.Defaults) (bin string, args []string, autossh bool, err error) {
@@ -162,11 +173,11 @@ func Command(t config.Tunnel, defaults config.Defaults) (bin string, args []stri
 
 	autossh = HasAutossh()
 	if autossh {
-		bin = "autossh"
+		bin = lookPathOr("autossh")
 		// -M 0 disables autossh's own monitoring port; rely on ServerAlive.
 		args = append(args, "-M", "0")
 	} else {
-		bin = "ssh"
+		bin = lookPathOr("ssh")
 	}
 
 	// -N: no remote command, -T: no pty. Background is handled by us, not -f,

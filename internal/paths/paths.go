@@ -3,6 +3,7 @@
 package paths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -33,10 +34,11 @@ func ConfigFile(override string) string {
 }
 
 // StateDir returns the runtime state directory ($XDG_STATE_HOME/tunneldir),
-// creating it if necessary.
+// creating it if necessary. It is private to the user (0700) since the logs and
+// pidfiles beneath it can leak hostnames, usernames and connection detail.
 func StateDir() (string, error) {
 	dir := filepath.Join(stateHome(), appName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -44,6 +46,9 @@ func StateDir() (string, error) {
 
 // PidFile returns the pidfile path for a named tunnel, ensuring its dir exists.
 func PidFile(name string) (string, error) {
+	if err := validName(name); err != nil {
+		return "", err
+	}
 	dir, err := subdir("pids")
 	if err != nil {
 		return "", err
@@ -53,11 +58,24 @@ func PidFile(name string) (string, error) {
 
 // LogFile returns the log path for a named tunnel, ensuring its dir exists.
 func LogFile(name string) (string, error) {
+	if err := validName(name); err != nil {
+		return "", err
+	}
 	dir, err := subdir("logs")
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, name+".log"), nil
+}
+
+// validName rejects tunnel names that could escape the state directory when used
+// to build a pid/log filename. Config-loaded names are already validated, but
+// the `logs` command takes a name straight from argv, so guard here too.
+func validName(name string) error {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return fmt.Errorf("invalid tunnel name %q", name)
+	}
+	return nil
 }
 
 // SystemdUnitFile returns the path of the user systemd unit we generate.
@@ -71,7 +89,7 @@ func subdir(name string) (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(state, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
