@@ -16,7 +16,12 @@ import (
 	"tunneldir/internal/service"
 	"tunneldir/internal/status"
 	"tunneldir/internal/tunnel"
+	"tunneldir/internal/updater"
 )
+
+// version is the build's version string. It is "dev" for local builds and is
+// overridden at release time via -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
 
 const usage = `tunneldir — manage SSH tunnels from a YAML file
 
@@ -36,13 +41,17 @@ Commands:
   validate                validate the config file
   install [--run]         install/enable the systemd autostart unit
   uninstall [--run]       disable/remove the systemd autostart unit
+  update [--check]        update to the latest release (--check only reports)
+  version                 print the version
 
 Config resolution: --config, then $TUNNELDIR_CONFIG, then ./tunnels.yaml,
 then ~/.config/tunneldir/tunnels.yaml
 `
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	code := run(os.Args[1:])
+	maybeNotifyUpdate(os.Args[1:])
+	os.Exit(code)
 }
 
 func run(argv []string) int {
@@ -57,6 +66,11 @@ func run(argv []string) int {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return 0
+	case "-v", "--version", "version":
+		fmt.Printf("tunneldir %s\n", version)
+		return 0
+	case "update":
+		return cmdUpdate(rest)
 	case "install":
 		return toErr(service.Install(paths.ConfigFile(configPath), hasFlag(rest, "--run")))
 	case "uninstall":
@@ -189,6 +203,54 @@ func cmdLogs(rest []string) int {
 		if _, err := io.Copy(os.Stdout, f); err != nil {
 			return 1
 		}
+	}
+}
+
+// cmdUpdate handles `tunneldir update [--check]`: --check only reports whether a
+// newer release exists, while a bare update downloads and replaces the binary.
+func cmdUpdate(rest []string) int {
+	if hasFlag(rest, "--check") {
+		latest, newer, err := updater.Check(version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+			return 1
+		}
+		if newer {
+			fmt.Printf("a newer version (%s) is available — run: tunneldir update\n", latest)
+		} else {
+			fmt.Printf("up to date (%s)\n", version)
+		}
+		return 0
+	}
+	newVersion, err := updater.SelfUpdate(version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		return 1
+	}
+	if newVersion == "" {
+		fmt.Printf("already on the latest version (%s)\n", version)
+	} else {
+		fmt.Printf("updated to %s\n", newVersion)
+	}
+	return 0
+}
+
+// maybeNotifyUpdate prints a one-line notice to stderr when a newer release is
+// available. It is best-effort and cached (at most one network check per day);
+// any error is swallowed so it never disrupts the command that just ran.
+func maybeNotifyUpdate(argv []string) {
+	if version == "dev" {
+		return
+	}
+	_, rest := extractConfigFlag(argv)
+	if len(rest) > 0 {
+		switch rest[0] {
+		case "-h", "--help", "help", "-v", "--version", "version", "update":
+			return
+		}
+	}
+	if latest, ok := updater.CheckCached(version); ok {
+		fmt.Fprintf(os.Stderr, "\na newer version (%s) is available — run: tunneldir update\n", latest)
 	}
 }
 

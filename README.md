@@ -3,17 +3,38 @@
 Manage a set of SSH tunnels from a single `tunnels.yaml` file. Each tunnel runs
 in the **background** via [`autossh`](https://www.harding.motd.ca/autossh/)
 (auto-reconnecting), falling back to plain `ssh` when autossh isn't installed.
-A `docker ps`-style status view shows what's up, and any tunnel can be flagged to
+A status view shows what's up, and any tunnel can be flagged to
 **autostart** at boot via a systemd user service.
 
 Single static Go binary — no runtime, no interpreter. Drop it on any machine.
 
-## Build & install
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tallbiscuits/tunneldir/main/install.sh | sh
+```
+
+This downloads the right release binary for your OS/arch, verifies its SHA256,
+and installs it to `~/.local/bin/tunneldir` (no sudo). Pin a version with
+`VERSION=v0.1.0 sh` or change the target with `INSTALL_DIR=...`. Make sure
+`~/.local/bin` is on your `PATH`.
+
+```sh
+tunneldir --version        # show the installed version
+tunneldir update           # update in place to the latest release
+tunneldir update --check    # report whether a newer release exists
+```
+
+`tunneldir` also checks GitHub for a newer release at most once a day and prints
+a one-line notice when one is available. Disable it by setting
+`TUNNELDIR_NO_UPDATE_CHECK=1`.
+
+### Build from source
 
 ```sh
 ./build.sh                 # -> ./tunneldir   (host platform)
 ./build.sh all             # -> ./dist/...    (linux/darwin, amd64/arm64)
-sudo make install          # -> /usr/local/bin/tunneldir
+make install               # -> /usr/local/bin/tunneldir (needs sudo for that dir)
 ```
 
 Requires Go to build. Runtime needs `ssh`, and ideally `autossh`
@@ -84,6 +105,8 @@ tunneldir list
 tunneldir validate
 tunneldir install [--run]        # systemd autostart unit
 tunneldir uninstall [--run]
+tunneldir update [--check]       # self-update to the latest release
+tunneldir version                # print the version
 ```
 
 The convenience form `tunneldir <name> <command>` also works, e.g.
