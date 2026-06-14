@@ -1,0 +1,17 @@
+# Built binary (produced by ./build.sh or `make build`)
+/tunneldir
+
+# Cross-compiled release artifacts
+/dist/
+
+# Personal config (use tunnels.example.yaml as the template). The live config
+# holds real hosts/keys and should stay out of version control.
+/tunnels.yaml
+
+# Go test/coverage output
+*.test
+*.out
+
+# Editor / OS cruft
+*.swp
+.DS_Store
