@@ -199,6 +199,32 @@ no linger (cron runs it outside any login session):
 @reboot /usr/local/bin/tunneldir --config /path/to/tunnels.yaml up --autostart
 ```
 
+### Keys for unattended tunnels
+
+A service that starts at boot has **no `ssh-agent`** and no human to type a
+passphrase. A passphrase-protected key therefore can't authenticate and the
+tunnel fails with `Permission denied (publickey)` — even though it works fine
+when you run it interactively (your agent has the key unlocked).
+
+So an `autostart` tunnel needs a **passphrase-less key**. The recommended setup
+is a dedicated key, locked down on the server so it can do nothing but forward:
+
+```sh
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_tunneldir          # no passphrase
+ssh-copy-id -i ~/.ssh/id_tunneldir.pub you@server           # or paste it manually
+```
+
+Point the tunnel (or `defaults`) at it with `identity_file: ~/.ssh/id_tunneldir`,
+and on the server restrict the key in `~/.ssh/authorized_keys`:
+
+```
+restrict,permitopen="localhost:8000" ssh-ed25519 AAAA... tunneldir
+```
+
+`tunneldir install` and `tunneldir status` warn when an autostart tunnel's key is
+passphrase-protected or missing, and `status` shows the reason a tunnel is
+`DEGRADED` (auth, refused, DNS, timeout, …) so failures aren't silent.
+
 ## Notes
 
 - **autossh vs ssh:** with `autossh` installed, a dropped connection

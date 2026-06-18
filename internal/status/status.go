@@ -13,6 +13,8 @@ import (
 
 	"tunneldir/internal/config"
 	"tunneldir/internal/manager"
+	"tunneldir/internal/paths"
+	"tunneldir/internal/sshkey"
 	"tunneldir/internal/tunnel"
 )
 
@@ -26,6 +28,7 @@ type State struct {
 	PID       int
 	Uptime    time.Duration
 	Status    string // UP | DEGRADED | DOWN
+	Reason    string // for DEGRADED: short cause pulled from the log tail
 }
 
 const (
@@ -81,7 +84,118 @@ func collectOne(t config.Tunnel) State {
 			break
 		}
 	}
+	if s.Status == StatusDegraded {
+		// Process is up but a forward isn't working — surface why from the log
+		// so the user doesn't have to go digging (auth, refused, DNS, ...).
+		s.Reason = degradedReason(t.Name)
+	}
 	return s
+}
+
+// degradedReason scans the tail of a tunnel's log for a recognisable failure
+// and returns a short human cause, or "" if none is found.
+func degradedReason(name string) string {
+	path, err := paths.LogFile(name)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(tailString(path, 8192), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if r := classifyLogLine(lines[i]); r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
+// classifyLogLine maps a known ssh/autossh error line to a short cause.
+func classifyLogLine(line string) string {
+	switch {
+	case strings.Contains(line, "Permission denied"),
+		strings.Contains(line, "Too many authentication failures"):
+		return "SSH auth rejected (Permission denied) — check the key; a passphrase-protected key can't be used unattended"
+	case strings.Contains(line, "Host key verification failed"),
+		strings.Contains(line, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
+		return "host key verification failed — update known_hosts on the server-side account running the tunnel"
+	case strings.Contains(line, "Connection refused"):
+		return "connection refused by the server"
+	case strings.Contains(line, "Could not resolve hostname"),
+		strings.Contains(line, "Name or service not known"),
+		strings.Contains(line, "nodename nor servname"):
+		return "host name could not be resolved (DNS)"
+	case strings.Contains(line, "Connection timed out"),
+		strings.Contains(line, "not responding"),
+		strings.Contains(line, "Operation timed out"):
+		return "connection timed out — host unreachable or firewalled"
+	case strings.Contains(line, "Connection reset by"),
+		strings.Contains(line, "kex_exchange_identification"):
+		return "connection reset by the server during handshake"
+	case strings.Contains(line, "remote port forwarding failed"),
+		strings.Contains(line, "bind: Address already in use"):
+		return "a forwarded port is already in use"
+	default:
+		return ""
+	}
+}
+
+// tailString returns up to the last n bytes of the file at path (empty on error).
+func tailString(path string, n int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := info.Size() - n
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, info.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && len(buf) > 0 {
+		// ReadAt returns io.EOF when it fills the buffer exactly; tolerate short
+		// reads by trusting whatever was read into buf.
+	}
+	return string(buf)
+}
+
+// KeyWarning returns a warning naming any autostart tunnels whose SSH key an
+// unattended boot service can't use — passphrase-protected (no agent at boot to
+// unlock it) or missing. It returns "" when every autostart key is usable, so
+// callers can print it unconditionally. This is the auth analogue of the linger
+// check: it turns a silent "Permission denied" at boot into an up-front warning.
+func KeyWarning(cfg *config.Config) string {
+	var encrypted, missing []string
+	for _, name := range cfg.AutostartNames() {
+		t, ok := cfg.Tunnel(name)
+		if !ok || t.IdentityFile == "" {
+			continue // no explicit key: left to ssh defaults/agent, can't judge
+		}
+		switch sshkey.Inspect(t.IdentityFile) {
+		case sshkey.Encrypted:
+			encrypted = append(encrypted, fmt.Sprintf("%s (%s)", name, t.IdentityFile))
+		case sshkey.Missing:
+			missing = append(missing, fmt.Sprintf("%s (%s)", name, t.IdentityFile))
+		}
+	}
+	if len(encrypted) == 0 && len(missing) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("warning: autostart tunnel(s) have an SSH key an unattended boot service can't use\n")
+	b.WriteString("(there is no ssh-agent at boot to unlock a passphrase):\n")
+	for _, e := range encrypted {
+		fmt.Fprintf(&b, "    passphrase-protected: %s\n", e)
+	}
+	for _, m := range missing {
+		fmt.Fprintf(&b, "    key not found:        %s\n", m)
+	}
+	b.WriteString("Use a dedicated passphrase-less key for these, e.g.:\n")
+	b.WriteString("    ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_tunneldir\n")
+	b.WriteString("then set the tunnel's identity_file to it and authorise the public key on the server.\n")
+	return b.String()
 }
 
 // processType reports the actual program backing a running tunnel by reading
@@ -138,6 +252,14 @@ func Render(w *os.File, states []State) {
 			s.Name, s.Target, s.Forwards, s.Type, auto, pid, up, colorize(s.Status, color))
 	}
 	_ = tw.Flush()
+
+	// Explain degraded tunnels beneath the table so the cause is visible without
+	// opening the log.
+	for _, s := range states {
+		if s.Status == StatusDegraded && s.Reason != "" {
+			fmt.Fprintf(w, "  ! %s: %s\n", s.Name, s.Reason)
+		}
+	}
 }
 
 func colorize(status string, enabled bool) string {

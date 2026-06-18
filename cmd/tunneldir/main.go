@@ -98,17 +98,28 @@ func run(argv []string) int {
 		return cmdInit(configPath)
 	case "install":
 		run := hasFlag(rest, "--run")
+		resolved := paths.ConfigFile(configPath)
+		// Load the config (best effort) for both the autostart count and the
+		// unattended-key preflight printed after install.
+		cfg, _ := config.Load(resolved)
+		var installErr error
 		if hasFlag(rest, "--system") {
 			// System-wide unit: starts at boot as the invoking user, no linger.
-			return toErr(service.InstallSystem(paths.ConfigFile(configPath), run))
+			installErr = service.InstallSystem(resolved, run)
+		} else {
+			autostart := 0
+			if cfg != nil {
+				autostart = len(cfg.AutostartNames())
+			}
+			installErr = service.Install(resolved, run, autostart)
 		}
-		// Count autostart tunnels (best effort) so the user-unit install can
-		// explain whether they'll survive a reboot (depends on linger).
-		autostart := 0
-		if cfg, err := config.Load(paths.ConfigFile(configPath)); err == nil {
-			autostart = len(cfg.AutostartNames())
+		// A boot service has no ssh-agent: warn if an autostart key needs one.
+		if installErr == nil && run && cfg != nil {
+			if w := status.KeyWarning(cfg); w != "" {
+				fmt.Fprint(os.Stderr, "\n"+w)
+			}
 		}
-		return toErr(service.Install(paths.ConfigFile(configPath), run, autostart))
+		return toErr(installErr)
 	case "uninstall":
 		if hasFlag(rest, "--system") {
 			return toErr(service.UninstallSystem(hasFlag(rest, "--run")))
@@ -152,6 +163,10 @@ func run(argv []string) int {
 			if w := service.LingerWarning(len(cfg.AutostartNames())); w != "" {
 				fmt.Fprint(os.Stderr, "\n"+w)
 			}
+		}
+		// Flag autostart tunnels whose key can't be used unattended.
+		if w := status.KeyWarning(cfg); w != "" {
+			fmt.Fprint(os.Stderr, "\n"+w)
 		}
 		return 0
 
