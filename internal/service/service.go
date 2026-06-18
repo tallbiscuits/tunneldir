@@ -77,12 +77,14 @@ func UnitText(binPath, configPath string) string {
 }
 
 // SystemUnitText renders the system-wide unit for user (User=) with home pinned
-// as HOME and the working directory. user is assumed newline-free (callers
-// guard); paths are systemd-quoted.
+// as HOME and the working directory. user/home are assumed newline-free (callers
+// guard). The Exec lines and Environment= are systemd-quoted; WorkingDirectory=
+// takes the whole remainder of the line as a literal path, so it must NOT be
+// quoted (systemd would treat the quotes as part of the path).
 func SystemUnitText(binPath, configPath, user, home string) string {
 	inv := invocation(binPath, configPath)
 	homeEnv := systemdQuote("HOME=" + home)
-	return fmt.Sprintf(systemUnitTemplate, user, homeEnv, inv, inv, systemdQuote(home))
+	return fmt.Sprintf(systemUnitTemplate, user, homeEnv, inv, inv, home)
 }
 
 // invocation builds the quoted `<bin> [--config <cfg>]` prefix shared by both
