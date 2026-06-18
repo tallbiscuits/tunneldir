@@ -29,7 +29,8 @@ const usage = `tunneldir — manage SSH tunnels from a YAML file
 tunneldir keeps a set of SSH tunnels defined in tunnels.yaml. It starts them in
 the background with autossh (auto-reconnecting), falling back to plain ssh when
 autossh isn't installed, and shows a docker-ps-style view of what's up. Tunnels
-flagged "autostart: true" can be brought up at boot via a systemd user service.
+flagged "autostart: true" can be brought up at boot via a systemd unit (a
+per-user unit, or a system-wide boot service with "install --system").
 
 Usage:
   tunneldir [--config PATH] <command> [names...]
@@ -49,9 +50,12 @@ Config commands:
   validate                    check that the config parses and is valid
   init                        write a starter config (never overwrites an existing one)
 
-Autostart (systemd user service):
-  install [--run]             enable the autostart unit (--run applies it)
-  uninstall [--run]           disable/remove the autostart unit
+Autostart (systemd):
+  install [--run] [--system]  enable the autostart unit (--run applies it).
+                              user unit by default (no sudo; survives reboot only
+                              with linger). --system installs a boot service that
+                              runs as you and needs no linger (uses sudo).
+  uninstall [--run] [--system]  disable/remove the autostart unit
 
 Maintenance:
   update [--check]            update to the latest release (--check only reports)
@@ -93,8 +97,22 @@ func run(argv []string) int {
 	case "init":
 		return cmdInit(configPath)
 	case "install":
-		return toErr(service.Install(paths.ConfigFile(configPath), hasFlag(rest, "--run")))
+		run := hasFlag(rest, "--run")
+		if hasFlag(rest, "--system") {
+			// System-wide unit: starts at boot as the invoking user, no linger.
+			return toErr(service.InstallSystem(paths.ConfigFile(configPath), run))
+		}
+		// Count autostart tunnels (best effort) so the user-unit install can
+		// explain whether they'll survive a reboot (depends on linger).
+		autostart := 0
+		if cfg, err := config.Load(paths.ConfigFile(configPath)); err == nil {
+			autostart = len(cfg.AutostartNames())
+		}
+		return toErr(service.Install(paths.ConfigFile(configPath), run, autostart))
 	case "uninstall":
+		if hasFlag(rest, "--system") {
+			return toErr(service.UninstallSystem(hasFlag(rest, "--run")))
+		}
 		return toErr(service.Uninstall(hasFlag(rest, "--run")))
 	}
 
@@ -128,6 +146,13 @@ func run(argv []string) int {
 	case "status":
 		names := pickNames(cfg, rest, true)
 		status.Render(os.Stdout, status.Collect(cfg, names))
+		// If the autostart unit is installed but user-lingering is off, the
+		// autostart tunnels won't survive a reboot — flag that here.
+		if service.UnitInstalled() {
+			if w := service.LingerWarning(len(cfg.AutostartNames())); w != "" {
+				fmt.Fprint(os.Stderr, "\n"+w)
+			}
+		}
 		return 0
 
 	case "up":

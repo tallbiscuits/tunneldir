@@ -122,8 +122,8 @@ tunneldir logs <name> [-f]
 tunneldir list
 tunneldir validate
 tunneldir init                   # write a starter config (won't overwrite)
-tunneldir install [--run]        # systemd autostart unit
-tunneldir uninstall [--run]
+tunneldir install [--run] [--system]   # systemd autostart unit
+tunneldir uninstall [--run] [--system]
 tunneldir update [--check]       # self-update to the latest release
 tunneldir version                # print the version
 ```
@@ -151,23 +151,49 @@ running it — handy for debugging.
 
 ## Autostart at boot
 
-Tunnels with `autostart: true` are started by a generated **systemd user**
-service. The service is pinned to the config you installed it from.
+Tunnels with `autostart: true` are started by a generated systemd unit, pinned
+to the config you installed it from. At boot the service runs
+`tunneldir up --autostart`; on stop it runs `tunneldir down --all`. Manual-only
+tunnels wait for an explicit `tunneldir up <name>`.
+
+There are two flavours — pick based on whether you need the tunnels up **at
+boot, before/without anyone logging in** (the usual case for a server):
+
+### System service (`--system`) — survives reboot, recommended for servers
+
+A system-wide unit that runs as you and starts at boot independently of any
+login session. Needs `sudo`, but **no linger**.
+
+```sh
+tunneldir install --system           # preview the unit + sudo commands (dry-run)
+tunneldir install --system --run     # write /etc/systemd/system/tunneldir.service,
+                                     #   daemon-reload, enable --now (via sudo)
+```
+
+Remove it with `tunneldir uninstall --system --run`.
+
+### User service (default) — no sudo, but session-scoped
+
+A per-user unit. No sudo required, but a systemd **user** instance only runs at
+boot if you have *lingering* enabled — otherwise the unit is **session-scoped**:
+the tunnels come up when you log in and go down when you log out, so they do
+**not** survive a reboot on their own. (Lingering is off by default for good
+reason — it keeps user processes running with no active session.)
 
 ```sh
 tunneldir install              # preview the unit + commands (dry-run)
 tunneldir install --run        # write ~/.config/systemd/user/tunneldir.service,
                                #   daemon-reload, enable --now
-loginctl enable-linger $USER   # so it starts at boot without an active login
+loginctl enable-linger $USER   # OPTIONAL: make the user unit start at boot too
 ```
 
-At boot the service runs `tunneldir up --autostart`; on stop it runs
-`tunneldir down --all`. Manual-only tunnels wait for an explicit
-`tunneldir up <name>`.
+`install` and `status` will tell you when the user unit is session-scoped and
+point you at the boot-persistent options.
 
 Remove it with `tunneldir uninstall --run`.
 
-**No systemd?** Add a crontab line instead:
+**No systemd?** A user crontab line starts the tunnels at boot with no sudo and
+no linger (cron runs it outside any login session):
 
 ```
 @reboot /usr/local/bin/tunneldir --config /path/to/tunnels.yaml up --autostart

@@ -19,6 +19,12 @@ purge=0
 # exists; it knows where its own unit lives.
 if [ -x "$BIN" ]; then
   "$BIN" uninstall --run >/dev/null 2>&1 || true
+  # If a system-wide unit was installed (`install --system`), remove it too.
+  # This needs sudo, so it may prompt; skip quietly when there's no unit.
+  if [ -e /etc/systemd/system/tunneldir.service ]; then
+    echo "removing system-wide unit (needs sudo)..."
+    "$BIN" uninstall --system --run || true
+  fi
 fi
 
 if [ -e "$BIN" ]; then
