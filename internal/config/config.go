@@ -113,9 +113,6 @@ func (c *Config) AutostartNames() []string {
 }
 
 func (c *Config) normalizeAndValidate() error {
-	if len(c.Tunnels) == 0 {
-		return fmt.Errorf("no tunnels defined")
-	}
 	c.Defaults.IdentityFile = expandHome(c.Defaults.IdentityFile)
 
 	seen := make(map[string]bool)

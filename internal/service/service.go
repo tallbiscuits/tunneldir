@@ -305,6 +305,12 @@ func UnitInstalled() bool {
 	return err == nil
 }
 
+// SystemUnitInstalled reports whether the system-wide unit is present.
+func SystemUnitInstalled() bool {
+	_, err := os.Stat(systemUnitPath)
+	return err == nil
+}
+
 // LingerEnabled reports whether systemd user-lingering is enabled for the
 // current user — i.e. whether the user's systemd instance (and thus our user
 // unit) is started at boot rather than only while a login session is active.

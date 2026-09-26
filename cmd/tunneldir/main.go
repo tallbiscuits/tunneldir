@@ -36,6 +36,9 @@ Usage:
   tunneldir [--config PATH] <command> [names...]
   tunneldir <name> <command>            (convenience form, e.g. "tunneldir web up")
 
+Names may be abbreviated to any unique part ("web" for "web-staging"). Run up,
+down, restart, logs, edit or remove without a name to pick tunnels from a numbered list.
+
 Tunnel commands (act on named tunnels, or --all / --autostart):
   up [names...] [--all] [--autostart] [--print-cmd]
                               start tunnels in the background
@@ -46,6 +49,9 @@ Tunnel commands (act on named tunnels, or --all / --autostart):
   logs <name> [-f]            print a tunnel's log; -f follows it
 
 Config commands:
+  add [name]                  add a tunnel (asks for its settings)
+  edit [name]                 change a tunnel's settings (Enter keeps a value)
+  remove [name] [--yes]       remove a tunnel, stopping it first
   list                        list the tunnels defined in the config
   validate                    check that the config parses and is valid
   init                        write a starter config (never overwrites an existing one)
@@ -96,6 +102,8 @@ func run(argv []string) int {
 		return cmdUpdate(rest)
 	case "init":
 		return cmdInit(configPath)
+	case "add":
+		return cmdAdd(configPath, rest)
 	case "install":
 		run := hasFlag(rest, "--run")
 		resolved := paths.ConfigFile(configPath)
@@ -140,7 +148,7 @@ func run(argv []string) int {
 	}
 
 	// Convenience form: `tunneldir <name> <command>`.
-	if _, isTunnel := cfg.Tunnel(cmd); isTunnel && len(rest) >= 1 && isVerb(rest[0]) {
+	if len(rest) >= 1 && isVerb(rest[0]) && !isCommand(cmd) {
 		name := cmd
 		cmd = rest[0]
 		rest = append([]string{name}, rest[1:]...)
@@ -156,6 +164,13 @@ func run(argv []string) int {
 
 	case "status":
 		names := pickNames(cfg, rest, true)
+		if len(stripFlags(rest)) > 0 {
+			names = expandNames(cfg, stripFlags(rest))
+		}
+		if len(cfg.Tunnels) == 0 {
+			fmt.Println("no tunnels yet; add one with: tunneldir add")
+			return 0
+		}
 		status.Render(os.Stdout, status.Collect(cfg, names))
 		// If the autostart unit is installed but user-lingering is off, the
 		// autostart tunnels won't survive a reboot — flag that here.
@@ -172,30 +187,40 @@ func run(argv []string) int {
 
 	case "up":
 		if hasFlag(rest, "--print-cmd") {
-			return cmdPrintCmd(cfg, pickNames(cfg, stripFlags(rest), true))
+			names := pickNames(cfg, stripFlags(rest), true)
+			if len(stripFlags(rest)) > 0 {
+				names = expandNames(cfg, stripFlags(rest))
+			}
+			return cmdPrintCmd(cfg, names)
 		}
-		names := pickNames(cfg, rest, false)
-		if !requireSelection(names) {
+		names, ok := selectNames(cfg, rest, "up")
+		if !ok {
 			return 2
 		}
 		return toErr(manager.Up(cfg, names))
 
 	case "down":
-		names := pickNames(cfg, rest, false)
-		if !requireSelection(names) {
+		names, ok := selectNames(cfg, rest, "down")
+		if !ok {
 			return 2
 		}
 		return toErr(manager.Down(cfg, names))
 
 	case "restart":
-		names := pickNames(cfg, rest, false)
-		if !requireSelection(names) {
+		names, ok := selectNames(cfg, rest, "restart")
+		if !ok {
 			return 2
 		}
 		return toErr(manager.Restart(cfg, names))
 
 	case "logs":
-		return cmdLogs(rest)
+		return cmdLogs(cfg, rest)
+
+	case "edit":
+		return cmdEdit(cfg, configPath, rest)
+
+	case "remove", "rm":
+		return cmdRemove(cfg, configPath, rest)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
@@ -235,10 +260,21 @@ func cmdPrintCmd(cfg *config.Config, names []string) int {
 	return 0
 }
 
-func cmdLogs(rest []string) int {
+func cmdLogs(cfg *config.Config, rest []string) int {
 	follow := hasFlag(rest, "-f") || hasFlag(rest, "--follow")
 	names := stripFlags(rest)
-	if len(names) != 1 {
+	switch {
+	case len(names) == 0 && interactive():
+		names = pickInteractively(cfg, "view logs of", true)
+		if len(names) == 0 {
+			return 2
+		}
+	case len(names) == 1:
+		var ok bool
+		if names, ok = resolveNames(cfg, names, "view logs of"); !ok || len(names) != 1 {
+			return 2
+		}
+	default:
 		fmt.Fprintln(os.Stderr, "logs requires exactly one tunnel name")
 		return 2
 	}
@@ -267,10 +303,11 @@ func cmdLogs(rest []string) int {
 	}
 }
 
-// starterConfig is the commented template written by `tunneldir init`. Keep it
-// in sync with tunnels.example.yaml.
+// starterConfig is the commented template written by `tunneldir init`. It has
+// no tunnels, so `tunneldir add` starts from a clean list; the commented example
+// mirrors tunnels.example.yaml.
 const starterConfig = `# Tunnel Director configuration.
-# Edit this file, then run:  tunneldir validate  &&  tunneldir list
+# Add tunnels with:  tunneldir add   (or edit this file by hand)
 
 defaults:
   # SSH key used for every tunnel unless overridden per-tunnel. ~ is expanded.
@@ -282,25 +319,19 @@ defaults:
     ServerAliveCountMax: 3
     ExitOnForwardFailure: "yes"
 
-tunnels:
-  # Reach a remote web frontend (:80) and a database (:5432) on local ports.
-  - name: web-staging
-    host: staging.example.com
-    user: deploy
-    # port: 22                       # ssh port to the server (default 22)
-    # identity_file: ~/.ssh/id_staging  # optional per-tunnel key override
-    autostart: true                  # brought up at boot by the systemd unit
-    forwards:
-      - local: 8080:localhost:80     # -L : localhost:8080 -> server's :80
-      - local: 5432:db.internal:5432 # -L : localhost:5432 -> db.internal:5432
-
-  # A SOCKS proxy on localhost:1080, started manually:  tunneldir up socks-prod
-  - name: socks-prod
-    host: prod.example.com
-    user: deploy
-    autostart: false
-    forwards:
-      - dynamic: 1080                # -D 1080
+# Tunnels. Add them with "tunneldir add", or by hand following this example:
+#
+#   - name: web-staging              # short name used on the command line
+#     host: staging.example.com
+#     user: deploy                   # optional; default is your ssh user
+#     port: 22                       # optional ssh port (default 22)
+#     identity_file: ~/.ssh/id_staging  # optional per-tunnel key
+#     autostart: true                # start at boot via "tunneldir install"
+#     forwards:
+#       - local: 8080:localhost:80   # -L : localhost:8080 -> server's :80
+#       - dynamic: 1080              # -D : SOCKS proxy on localhost:1080
+#       - remote: 9000:localhost:3000  # -R : server's :9000 -> your :3000
+tunnels: []
 `
 
 // cmdInit writes a starter config to the --config path (if given) or the default
@@ -315,17 +346,21 @@ func cmdInit(configPath string) int {
 		fmt.Printf("config already exists at %s (left untouched)\n", target)
 		return 0
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	if err := os.WriteFile(target, []byte(starterConfig), 0o600); err != nil {
+	if err := writeStarter(target); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 	fmt.Printf("wrote starter config to %s\n", target)
-	fmt.Println("edit it, then run: tunneldir validate && tunneldir list")
+	fmt.Println("add your first tunnel with: tunneldir add")
 	return 0
+}
+
+// writeStarter writes the starter config to path, creating its directory.
+func writeStarter(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(starterConfig), 0o600)
 }
 
 // cmdUpdate handles `tunneldir update [--check]`: --check only reports whether a
@@ -393,22 +428,41 @@ func pickNames(cfg *config.Config, rest []string, emptyMeansAll bool) []string {
 	return names
 }
 
-// requireSelection guards mutating commands against silently doing nothing when
-// no tunnel was selected (e.g. a bare `up` with no names or selector).
-func requireSelection(names []string) bool {
-	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "no tunnels selected; pass tunnel name(s), --all, or --autostart")
-		return false
+// selectNames resolves the tunnels a mutating command (up/down/restart) acts
+// on. --all/--autostart win; typed names may be partial; with no names at all
+// an interactive terminal gets a picker, while a script gets an error rather
+// than silently doing nothing.
+func selectNames(cfg *config.Config, rest []string, verb string) ([]string, bool) {
+	if hasFlag(rest, "--all") || hasFlag(rest, "--autostart") {
+		return pickNames(cfg, rest, false), true
 	}
-	return true
+	if names := stripFlags(rest); len(names) > 0 {
+		return resolveNames(cfg, names, verb)
+	}
+	if interactive() {
+		// Nothing picked (cancelled, or nothing to act on) is not an error.
+		return pickInteractively(cfg, verb, false), true
+	}
+	fmt.Fprintln(os.Stderr, "no tunnels selected; pass tunnel name(s), --all, or --autostart")
+	return nil, false
 }
 
 func isVerb(s string) bool {
 	switch s {
-	case "up", "down", "restart", "status", "logs":
+	case "up", "down", "restart", "status", "logs", "edit", "remove", "rm":
 		return true
 	}
 	return false
+}
+
+// isCommand reports whether s is a top-level command, so the convenience form
+// `tunneldir <name> <verb>` never mistakes a command for a tunnel name.
+func isCommand(s string) bool {
+	switch s {
+	case "validate", "list", "init", "add", "install", "uninstall", "update", "version", "help":
+		return true
+	}
+	return isVerb(s)
 }
 
 // extractConfigFlag pulls a leading/standalone --config value out of argv.

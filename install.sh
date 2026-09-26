@@ -101,8 +101,19 @@ fi
 # Nudge the user if the install dir is not on PATH.
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
-  *) echo "note: $INSTALL_DIR is not on your PATH; add it with:" >&2
-     echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" >&2 ;;
+  *)
+    # Suggest the line for the user's login shell, persisted in its rc file.
+    case "$(basename "${SHELL:-sh}")" in
+      zsh)  rc="~/.zshrc";   line="export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+      bash) rc="~/.bashrc";  line="export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+      fish) rc="~/.config/fish/config.fish"; line="fish_add_path \"$INSTALL_DIR\"" ;;
+      *)    rc="~/.profile"; line="export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+    esac
+    echo "" >&2
+    echo "note: $INSTALL_DIR is not on your PATH, so your shell can't find 'tunneldir'." >&2
+    echo "Fix it by adding it to $rc, then open a new terminal:" >&2
+    echo "  echo '$line' >> $rc" >&2
+    ;;
 esac
 
 echo ""
