@@ -15,3 +15,5 @@
 # Editor / OS cruft
 *.swp
 .DS_Store
+
+index.html
